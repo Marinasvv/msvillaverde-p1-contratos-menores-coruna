@@ -149,10 +149,18 @@ def _normalize_tipo_contrato(valor):
 
 
 def _normalize_espacios(serie: pd.Series) -> pd.Series:
-    """Colapsa espacios dobles/sueltos y quita el espacio antes de una coma"""
+    """Colapsa espacios dobles/sueltos, quita el espacio antes de una coma y
+    asegura que haya exactamente un espacio despues (ej. 'ROCA,OCTAVIO' ->
+    'ROCA, OCTAVIO'). Encontrado con 65 filas afectadas al revisar el
+    ranking de empresas en Power BI: el expediente 541/2019/1868 (NIF "*")
+    quedaba separado del resto de contratos de la misma persona porque a
+    "VILLAZALA ROCA,OCTAVIO" le faltaba el espacio tras la coma - la regla
+    anterior solo comprobaba el espacio ANTES de la coma, no despues.
+    """
     s = serie.str.strip()
     s = s.str.replace(r"\s+", " ", regex=True)
     s = s.str.replace(r"\s+,", ",", regex=True)
+    s = s.str.replace(r",(?=\S)", ", ", regex=True)
     return s
 
 

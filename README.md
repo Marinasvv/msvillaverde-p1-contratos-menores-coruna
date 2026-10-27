@@ -63,6 +63,7 @@ Lee `data/processed/bronze_contratos_menores.csv` y escribe `data/processed/cont
 - **`importe` → número**: el origen mezcla `"1234.56"` (punto decimal, sin símbolo) con formato español `"1.234,56 €"` (punto de millares, coma decimal, símbolo de euro). El script quita el símbolo `€`, y si el valor tiene coma y punto a la vez asume que el punto es de millares; si solo tiene coma, la trata como decimal. Caso puntual: el expediente `AD0/2021/130` tiene `"9.399.28 €"` (dos puntos, sin ninguna coma). La agrupación en grupos de 3 dígitos + 2 decimales finales (`9` + `.399` + `.28`) coincide exactamente con el formato español de moneda, y el único error es que el separador decimal es un punto en vez de una coma — un solo carácter mal tecleado, igual que el caso de la fecha. Además, la lectura alternativa (ignorar la puntuación y leer `939.928 €`) superaría varias veces el umbral legal de 15.000 € para servicios (ver más abajo), por lo que ni siquiera podría estar legalmente publicado como contrato menor — el contexto confirma la lectura correcta. Se reconstruye a `9399.28`. Solo queda **1 importe** que de verdad no existe en el origen (expediente `GA2/2019/49`, T4 2019): esa fila no tiene ningún valor de importe en la hoja de cálculo, no es un error de formato, y se deja vacío.
 - **`tipo_contrato` → categoría unificada**: 2019-2020 usan letras (`A`, `E`, `C`, `Z`) y 2021 usa palabras (`Obras`, `Servicios`, `Suministro`/`Suministros`, `Privado`), con espacios sueltos en algunos valores (`"Servicios "`) y una categoría rara que solo aparece una vez (`"Concesión obras públicas"`). El script traduce las letras a su significado real (`A`→Obras, `E`→Servicios, `C`→Suministros, `Z`→Otros, según la propia leyenda que trae cada fichero en la subcabecera) y unifica mayúsculas/espacios para que 2019, 2020 y 2021 se puedan comparar en el mismo gráfico.
 - **`empresa_adjudicataria` y `objeto` → espacios normalizados**: se encontró, al preparar el modelo de Snowflake, que **1.795 filas** de `empresa_adjudicataria` y **1.154 de `objeto`** tienen espacios dobles o un espacio suelto antes de una coma (ej. `"ANTELO LAVANDEIRA , CLAUDIO"` en vez de `"ANTELO LAVANDEIRA, CLAUDIO"`). No es un error de una fila concreta, es ruido de formato extendido por todo el dataset: antes de corregirlo, el mismo NIF `34889996P` (una sola persona con 3 contratos distintos y legítimos) aparecía con 2 variantes de nombre, y los nombres únicos de `empresa_adjudicataria` bajaban de 2.535 a 2.519 solo con normalizar esto — es decir, 16 "personas distintas" eran en realidad la misma persona partida en dos por un espacio. Se corrige con una regla general (colapsar espacios, quitar el espacio antes de coma), no con parches por fila.
+  - **Segunda vuelta, encontrada después, al construir el ranking de empresas en Power BI**: la regla de arriba solo comprobaba el espacio **antes** de la coma, no si faltaba **después**. El expediente `541/2019/1868` (NIF `"*"`) tenía `"VILLAZALA ROCA,OCTAVIO"` (sin espacio tras la coma) mientras sus otros 8 contratos tenían `"VILLAZALA ROCA, OCTAVIO"` — como ese contrato está anonimizado, la clave híbrida de `dim_empresa` lo separó en una entidad aparte. Afectaba a **65 filas** en total. Se amplió la regla para también insertar el espacio que falte justo después de una coma.
 
 ### 2. Tratamiento de nulos
 
@@ -157,6 +158,79 @@ El control de integridad referencial (`fecha_key` de `fact_contratos` sin fila e
 6 consultas + 1 de control de calidad. Para "por año"/"por mes" se usa siempre la **fecha de adjudicación real** (`dim_fecha`), no el trimestre de publicación del fichero — ya vimos que no siempre coinciden.
 
 Ver explicación detallada de cada consulta en el propio archivo
+
+## Power BI
+
+### Hallazgo: un contrato publicado con importe 0 € — y un matiz técnico de DAX
+
+Al construir la medida `Nº Contratos Exactos al Umbral` (punto de investigación del fraccionamiento), el resultado daba **33** en vez de los **32** ya verificados por SQL. La fila de más era el expediente `541/2019/536` (`SERYE INGENIEROS SL`, "realización de pruebas con un vehículo para transporte de personas con movilidad reducida", T1 2019) — un contrato publicado con **importe literal de 0 €**, no un hueco de dato.
+
+Como además es de T1 2019, su `tipo_contrato` es `"no disponible"` y por tanto no tiene umbral legal definido (`UMBRAL_SIN_IVA` en blanco para esa categoría). En DAX, al restar, un valor en blanco se trata como `0` — así que `ABS(0 - BLANK())` da `0`, por debajo del margen de tolerancia, y la medida lo contaba como "exacto al umbral" aunque esa categoría no tenga ningún umbral con el que comparar. Se corrigió añadiendo `NOT ISBLANK(RELATED(DIM_TIPO_CONTRATO[UMBRAL_SIN_IVA]))` al filtro, para excluir explícitamente las filas sin umbral aplicable, no solo las filas sin importe.
+
+### Hallazgo: un mismo proveedor repitiendo el importe exacto al umbral legal
+
+Con la medida ya corregida (32 contratos "exactos al umbral", 3 "por encima"), se construyeron dos tablas de detalle en la página de Investigación para revisar los 35 casos uno a uno, buscando patrones de posible fraccionamiento.
+
+De los 32 contratos con el importe exacto al umbral legal (15.000,00 € en Servicios/Suministros, 40.000,00 € en Obras), **`VILLAZALA ROCA, OCTAVIO` aparece 5 veces** — el proveedor más repetido con diferencia. Las 5 filas son siempre por el mismo objeto ("residencia/gastos de perros y gatos incautados"), en expedientes distintos, repartidos entre enero de 2020 y febrero de 2021 (`541/2020/161`, `541/2020/1730`, `541/2020/2113`, `541/2020/2168`, `541/2021/241`), cada uno facturado exactamente a 15.000,00 € sin IVA, ni un céntimo más ni menos.
+
+Otros proveedores aparecen 2 veces cada uno en la misma tabla (`VAZQUEZ CALATAYUD ARQUITECTOS S.L.`, `CARPINTERIA METALICA DACRI SL`, `LAIROSIDE S L`, `CONSTRUCCIONES LOPEZ CAO S.L.` en Obras a 40.000 €), pero ninguno con la frecuencia ni la coincidencia de objeto de `VILLAZALA ROCA, OCTAVIO`.
+
+**`LAIROSIDE S L` es también una clínica veterinaria** (aparece en el directorio de empresas de "Actividades Veterinarias" de A Coruña, vinculada al [Hospital Veterinario Abeiro](https://www.informa.es/directorio-empresas/750_ACTIVIDADES-VETERINARIAS/Provincia_CORUNA.html), en Oleiros), y sus 2 contratos exactos al umbral son por "ESTERILIZACIONES DE ANIMALES" (`541/2020/315`) y "ESTERILIZACIONES ANIMAIS 2021" (`541/2021/212`) — es decir, no es solo `VILLAZALA ROCA, OCTAVIO` el que se repite: **el bloque entero de gestión/bienestar animal del Ayuntamiento** (perrera municipal + esterilizaciones) aparece una y otra vez justo al límite legal, con dos proveedores distintos para dos servicios distintos. Revisando el `area_departamento` de estos 7 expedientes, además, no es siempre la misma área: `GESTION ADMINISTRATIVA MEDIO AMBIENTE MA1000` concentra los de 2020, pero los de 2021 aparecen repartidos en `INTERIOR IT2700` y `SERVICIOS GENERALES DE SEGURIDAD CIUDADANA SA0000` — el servicio de control animal parece haberse reorganizado administrativamente entre áreas sin dejar de trocearse en contratos de 15.000 €. El importe con IVA de los 3 contratos de `VILLAZALA ROCA, OCTAVIO` revisados es, además, **18.150,00 € exactos** (15.000 × 1,21, sin resto), confirmando que el cálculo está hecho justo para quedar en el límite.
+
+Por fecha, los 32 casos se concentran en 2020-2021 (4 de 2019, 15 de 2020, 13 de 2021), coherente con el hallazgo ya documentado de que el importe medio por contrato sube durante el COVID (consulta 5 de `analisis.sql`).
+
+**Lectura, sin poder confirmarlo con certeza**: un mismo servicio recurrente (gestión de animales incautados) facturado repetidamente justo al límite legal, por el mismo adjudicatario, es exactamente el patrón que la normativa de contratación pública busca evitar con el umbral de los 15.000 € (fraccionamiento del objeto del contrato para eludir un procedimiento de licitación mayor). No es una prueba — podría ser también que el servicio real cueste, mes a mes, casi justo eso — pero es el caso más claro que aparece en los datos para investigar con más detalle fuera de este proyecto.
+
+**Matiz tras una búsqueda rápida (fuente pública, no forma parte del dataset)**: según un artículo de opinión de [El Español/QuinceMil (2021)](https://www.elespanol.com/quincemil/opinion/20210320/mismo-residencia-guarderia-canina/567444175_0.amp.html), Octavio Villazala es el responsable del Centro Canino Montegatto en A Coruña, un centro especializado en guardería/residencia canina y felina. Esto encaja con el objeto de los contratos ("residencia de perros y gatos incautados") — parece ser el proveedor especializado de referencia para este servicio concreto en la ciudad, no un proveedor genérico cualquiera. Eso matiza algo la lectura: la repetición del proveedor por sí sola pesa menos como indicio de fraccionamiento si es, de hecho, quien ofrece ese servicio específico en A Coruña; lo que sigue llamando la atención es que cada contrato individual quede exactamente en el límite legal en vez de agruparse en un contrato de mayor duración sujeto a licitación. No se encontró ninguna noticia sobre sanciones o irregularidades asociadas a estos contratos — es solo contexto profesional público, no una conclusión.
+
+### Hallazgo: el pico de noviembre de 2020 y la caída de enero de 2021
+
+Al construir el gráfico de evolución mensual (`DIM_FECHA[FECHA]` expandida a nivel año+mes) apareció un pico muy marcado en **noviembre de 2020** (476 contratos, 2.215.749,70 €, el mes de mayor gasto de toda la serie), seguido de una caída muy brusca en **enero de 2021** (125 contratos, 264.063,83 €, el mes con menos contratos de los 3 años — aunque el mes con menos importe total de todos es agosto de 2019, 224.780,68 €, el parón veraniego habitual).
+
+Se investigó el pico de noviembre de 2020 para descartar que fuera un error de dato (un contrato gigante aislado, un duplicado no detectado...). No lo es: son **476 contratos repartidos**, y los de mayor importe son **todos de tipo "Obras"** (entre 22.000 € y 48.400 €, en áreas muy distintas: Bomberos, Deportes, Infraestructuras, Vivienda, Educación). Encaja con dos hallazgos anteriores:
+
+- El pico de **cierre de ejercicio presupuestario** en octubre-noviembre, visible los 3 años (consulta 6 de `analisis.sql`).
+- El **cambio de mezcla hacia más contratos de Obras** durante el estado de alarma (consulta 5) — noviembre de 2020 parece ser el mes donde ese cambio se concentró con más fuerza, y como Obras tiene contratos de mayor importe individual (umbral legal 40.000 € frente a 15.000 € del resto), agrupar muchos en un mismo mes dispara el total de golpe.
+
+**Hipótesis razonable, no confirmada del todo**: el Ayuntamiento pudo concentrar buena parte de la ejecución de obra pública del año COVID en el cierre de 2020, posiblemente aprovechando el menor uso de espacios públicos durante las restricciones — para confirmarlo con certeza haría falta el calendario de obras real del Ayuntamiento, que no forma parte de estos datos.
+
+### Hallazgo: el ranking de empresas tiene un núcleo estable + movimientos puntuales fuertes
+
+Comparando el top 15 de empresas por gasto (`Importe Total` por `DIM_EMPRESA[NOMBRE_NORMALIZADO]`) filtrando por cada uno de los 3 `periodo_covid` por separado, aparecen **4 empresas presentes en los 3 periodos** (cambiando de posición, pero sin desaparecer nunca del top 15):
+
+- `CONSTRUCCIONES LOPEZ CAO S.L.` — #4 Pre-COVID → **#1** Estado de alarma → #2 Post-alarma
+- `JARDINERIA ARCE S.L.` — #2 Pre-COVID → #8 Estado de alarma → #3 Post-alarma
+- `OBRAS RAMON COTELO, S.L.` — #8 Pre-COVID → #5 Estado de alarma → #12 Post-alarma
+- `INSTALACIONES DEPORTIVAS GALLEGAS S L` — #15 Pre-COVID → #6 Estado de alarma → #9 Post-alarma
+
+Y dos movimientos destacados en sentido contrario:
+- `MONTAJES ELECTRICOS VIZCAINO S.L.` era el **#1 destacado** Pre-COVID (muy por delante del resto) y **desaparece por completo** del top 15 en Estado de alarma y Post-alarma.
+- `ARIAS INFRAESTRUCTURAS S.A.` no aparecía en el top 15 Pre-COVID, y pasa a ser el **#1** en Post-estado de alarma.
+
+**Lectura**: no es ni "todo cambió" ni "nada cambió" con el COVID — hay un grupo reducido de proveedores habituales de obra pública con presencia continuada (probablemente relación contractual o de confianza ya establecida con el Ayuntamiento antes de la pandemia), y a la vez movimientos individuales fuertes de empresas concretas que entran o salen del radar de un periodo a otro.
+
+**El mismo patrón se repite, más atenuado, entre personas físicas anonimizadas**: repitiendo el ejercicio filtrando solo por `tipo_persona = "Persona física anonimizada"`, **7 personas** aparecen en el top 15 de **2 de los 3 periodos** (ninguna en los 3, a diferencia de las empresas): `ABELENDA HERMIDA, ANA ISABEL`, `PRIETO BLANCO, JESUS MIGUEL`, `FERNANDEZ LISTE, SALOME` y `VILLAZALA ROCA, OCTAVIO` (Pre-COVID + Estado de alarma); `PENA VILLAR, MANUEL`, `RODRIGUEZ ALVAREZ, DAVID` y `RODRIGUEZ CASTRO, ANGEL MARCELO` (Estado de alarma + Post-alarma). No es solo un fenómeno de empresas constructoras — también hay profesionales individuales con relación recurrente con el Ayuntamiento, probablemente técnicos especializados (de `RODRIGUEZ ALVAREZ, DAVID` ya sabemos, por su `objeto`, que es quien restaura el reloj monumental de María Pita — un trabajo muy específico que explica por qué se repite).
+
+### Hallazgo: dos formas distintas de llegar al top 15 — pocos contratos grandes vs. muchos pequeños
+
+Añadiendo `Nº Contratos` e `Importe Medio` a la tabla del top 15 (no solo `Importe Total`), aparecen dos estrategias claramente distintas entre las empresas que llegan al mismo puesto:
+
+- **Pocos contratos, de importe alto**: `CANARGA S.L.` (5 contratos, 42.790,82 € de media), `CONTORNA TÉCNICAS CONSTRUCTIVAS, SL` (5 contratos, 29.228,35 € de media).
+- **Muchos contratos, de importe bajo**: `OBRAS RAMON COTELO, S.L.` (52 contratos, solo 4.501,12 € de media), `COMARO NOVE, S.L.U` (35 contratos, 4.792,03 € de media).
+
+El importe total por sí solo (el único dato que muestra el gráfico de barras del ranking) esconde esta diferencia — dos empresas pueden estar en una posición parecida del ranking por motivos opuestos: una gana pocos contratos grandes, puntuales; la otra mantiene una relación continuada con muchos encargos pequeños.
+
+### Hallazgo: la anonimización de personas físicas se completa en el Post-estado de alarma
+
+Ya sabíamos (sección de limpieza, punto 2) que el Ayuntamiento fue anonimizando cada vez más estrictamente a las personas físicas adjudicatarias a lo largo del tiempo. Desglosando por `periodo_covid` (en vez de por año) se ve el momento exacto en que ese cambio se completa:
+
+| Periodo | Persona jurídica | Persona física identificada | Persona física anonimizada |
+|---|---|---|---|
+| Pre-COVID | 2.810 (79,72%) | 422 (11,97%) | 293 (8,31%) |
+| Estado de alarma | 2.290 (77,26%) | 235 (7,93%) | 437 (14,74%) |
+| Post-estado de alarma | 1.518 (78,61%) | **0 (0%)** | 413 (21,39%) |
+
+En el **Post-estado de alarma, ninguna persona física aparece ya con su DNI visible** — el 100% de los particulares adjudicatarios de ese periodo están anonimizados. El peso de las personas jurídicas (empresas) se mantiene estable alrededor del 78-80% en los 3 periodos; lo que cambia es solo cómo se trata a las personas físicas, no cuánto gasto reciben en conjunto.
 
 ```bash
 python -m venv .venv
