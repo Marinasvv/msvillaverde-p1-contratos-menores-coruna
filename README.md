@@ -181,7 +181,44 @@ Por fecha, los 32 casos se concentran en 2020-2021 (4 de 2019, 15 de 2020, 13 de
 
 **Lectura, sin poder confirmarlo con certeza**: un mismo servicio recurrente (gestión de animales incautados) facturado repetidamente justo al límite legal, por el mismo adjudicatario, es exactamente el patrón que la normativa de contratación pública busca evitar con el umbral de los 15.000 € (fraccionamiento del objeto del contrato para eludir un procedimiento de licitación mayor). No es una prueba — podría ser también que el servicio real cueste, mes a mes, casi justo eso — pero es el caso más claro que aparece en los datos para investigar con más detalle fuera de este proyecto.
 
-**Matiz tras una búsqueda rápida (fuente pública, no forma parte del dataset)**: según un artículo de opinión de [El Español/QuinceMil (2021)](https://www.elespanol.com/quincemil/opinion/20210320/mismo-residencia-guarderia-canina/567444175_0.amp.html), Octavio Villazala es el responsable del Centro Canino Montegatto en A Coruña, un centro especializado en guardería/residencia canina y felina. Esto encaja con el objeto de los contratos ("residencia de perros y gatos incautados") — parece ser el proveedor especializado de referencia para este servicio concreto en la ciudad, no un proveedor genérico cualquiera. Eso matiza algo la lectura: la repetición del proveedor por sí sola pesa menos como indicio de fraccionamiento si es, de hecho, quien ofrece ese servicio específico en A Coruña; lo que sigue llamando la atención es que cada contrato individual quede exactamente en el límite legal en vez de agruparse en un contrato de mayor duración sujeto a licitación. No se encontró ninguna noticia sobre sanciones o irregularidades asociadas a estos contratos — es solo contexto profesional público, no una conclusión.
+### Hallazgo: cómo es posible que haya 3 contratos "menores" por encima del umbral legal
+
+*(consulta 8 de `sql/analisis.sql`)*
+
+Por definición, un contrato menor que supera el umbral (15.000 €/40.000 € sin IVA) no debería poder tramitarse como tal — es justo el límite que obliga a un procedimiento de licitación mayor. Revisando los 3 casos uno a uno:
+
+| Expediente | Fecha | Empresa | Importe sin IVA | Umbral | % sobre el umbral | Objeto |
+|---|---|---|---|---|---|---|
+| `851/2019/75` | 2019-06-12 | CABLES Y ESLINGAS S.L.U. | 18.822,59 € | 15.000 € | 125,5% | Suministro e instalación de sistemas de protección y acceso, estación de autobuses |
+| `211/2021/735` | 2021-10-13 | ANGEL ROADE S.L. | 15.949,10 € | 15.000 € | 106,3% | Instalación caldera mural piscina de Riazor |
+| `831/2019/112` | 2019-12-13 | NOYA VAZQUEZ, JORGE JUAN | 28.921,45 € | 15.000 € | 192,8% | Adecuación de instalaciones anteriormente usadas por Empleo para nuevos usos del SEIS |
+
+Ninguno de los 3 tiene en el `objeto` una palabra clave que lo explique directamente (a diferencia, por ejemplo, de otro contrato de `MONTAJES ELECTRICOS VIZCAINO S.L.` que sí aparece en el dataset con el objeto empezando por "**Recoñecemento extraxudicial factura**...", expediente `211/2019/732` — un mecanismo legal distinto al contrato menor: regulariza contablemente un gasto ya ejecutado, en vez de adjudicar un contrato nuevo, y por eso puede no ajustarse al umbral de adjudicación).
+
+**Explicación más probable, sin poder confirmarla con los datos disponibles**: lo habitual en este tipo de desviación es que el contrato se adjudicara inicialmente por debajo del umbral y después se **modificara o ampliara** durante la ejecución (trabajo adicional imprevisto, típico en obras/instalaciones), de forma que el importe final publicado ya no coincide con el importe de adjudicación original — la LCSP permite modificaciones contractuales dentro de ciertos límites (art. 205-207) sin que eso implique una irregularidad. También es compatible con un simple error de clasificación del `tipo_contrato` en el dato de origen (p. ej. si debería haberse marcado como "no disponible"/otro tipo en vez de Servicios/Suministros). Con solo 3 casos sobre 8.421 filas (0,04%), y sin acceso al expediente administrativo real, no se puede ir más allá de señalar el hecho y las hipótesis más plausibles.
+
+### Hallazgo: un patrón sistemático de "quedarse justo por debajo del umbral" en dos grandes contratistas de obra civil
+
+*(consulta 9 de `sql/analisis.sql`)*
+
+Revisando no solo los importes exactos sino el **porcentaje sobre el umbral** de cada contrato (columna `pct_del_umbral` de la consulta 4 de `analisis.sql`) para los 2 principales contratistas de obra civil del ranking (`CONSTRUCCIONES LOPEZ CAO S.L.` y `ARIAS INFRAESTRUCTURAS S.A.`, ambas presentes en el top 15 en varios periodos), aparece un patrón mucho más fuerte que el de un solo contrato aislado:
+
+- **`CONSTRUCCIONES LOPEZ CAO S.L.`**: de sus 19 contratos de Obras/Servicios/Suministros, **10 están entre el 96,7% y el 100,0% del umbral legal** correspondiente (dos de ellos exactos al 100%, ya documentados arriba). Hasta inicios de 2020 sus contratos tenían importes dispersos (32%, 9%, 0,2% del umbral) — a partir de marzo de 2020 (coincidiendo con el inicio del estado de alarma), prácticamente todos sus contratos de Obras pasan a concentrarse justo por debajo del límite de 40.000 €.
+- **`ARIAS INFRAESTRUCTURAS S.A.`**: de sus 11 contratos, **5 están entre el 95,7% y el 100,0% del umbral**, con la misma concentración a partir de la segunda mitad de 2020.
+
+Las dos empresas, además, son las dos con el movimiento de ranking más llamativo entre periodos COVID (ver hallazgo siguiente). No se puede confirmar fraccionamiento intencionado solo con estos datos — pero el patrón (varios contratos del mismo adjudicatario, del mismo tipo, concentrados justo bajo el límite, intensificándose desde el inicio del COVID) es consistente en ambas empresas a la vez, lo que lo hace más llamativo que un caso aislado.
+
+### Hallazgo: un caso concreto que encaja con fraccionamiento real
+
+*(consulta 11 de `sql/analisis.sql`)*
+
+Para ir más allá de "importes cerca del umbral" y buscar fraccionamiento en sentido estricto (un mismo trabajo troceado en varios contratos para evitar la licitación mayor), se cruzaron pares de contratos del mismo `area_departamento` y `tipo_contrato`, publicados con pocos días de diferencia, cada uno por debajo del umbral individualmente pero que **sumados lo superarían**, ordenados por similitud de texto del `objeto` (`EDITDISTANCE` en Snowflake).
+
+El candidato más llamativo: **`ARIAS INFRAESTRUCTURAS S.A.` firmó el mismo día (13 de octubre de 2020) dos contratos de "mejora de pavimento de calzada"** — uno en la Avenida de Glasgow (39.797,00 €) y otro en la Rúa Sinfónica de Galicia (39.793,23 €) — cada uno calculado justo por debajo de los 40.000 €, pero sumados, **79.590,23 €**, muy por encima del umbral de Obras. Mismo adjudicatario, mismo día, mismo tipo de trabajo, cada importe individual a pocos cientos de euros del límite: es el patrón que más encaja de todo el dataset con un fraccionamiento deliberado del objeto del contrato.
+
+**Importante matizar el resto de resultados de la misma consulta**: la mayoría de pares con texto muy parecido (ej. "Dirección de obra" + "Dirección de ejecución de obra" + "Coordinación de seguridad y salud" + "Control arqueológico" de un mismo proyecto, en `111/2021/130`, `131`, `132`, `133`, por ejemplo) **no son fraccionamiento** — son roles profesionales distintos de un mismo proyecto de obra que la normativa de edificación española (LOE) exige adjudicar por separado (el director de obra, el director de ejecución y el coordinador de seguridad y salud no pueden ser, legalmente, el mismo contrato). Hay que leer esta consulta caso a caso, no asumir que toda coincidencia es sospechosa.
+
+Aparte, se encontró una peculiaridad de dato: el expediente `211/2020/389` (`FEDERACION GALLEGA DE ATLETISMO DE LA CORUÑA`) aparece dos veces con el mismo objeto pero importes distintos (14.996,35 € en T3 2020 y 13.996,04 € en T4 2020) — no lo capturan las reglas de deduplicación porque el importe difiere entre ambas filas. Es casi con toda seguridad el mismo contrato facturado en dos fases, no dos expedientes distintos, así que no es fraccionamiento — pero queda anotado por si se revisa el dato de origen más adelante.
 
 ### Hallazgo: el pico de noviembre de 2020 y la caída de enero de 2021
 
@@ -204,10 +241,16 @@ Comparando el top 15 de empresas por gasto (`Importe Total` por `DIM_EMPRESA[NOM
 - `INSTALACIONES DEPORTIVAS GALLEGAS S L` — #15 Pre-COVID → #6 Estado de alarma → #9 Post-alarma
 
 Y dos movimientos destacados en sentido contrario:
-- `MONTAJES ELECTRICOS VIZCAINO S.L.` era el **#1 destacado** Pre-COVID (muy por delante del resto) y **desaparece por completo** del top 15 en Estado de alarma y Post-alarma.
+- `MONTAJES ELECTRICOS VIZCAINO S.L.` era el **#1 destacado** Pre-COVID (muy por delante del resto) y **sale del top 15** en Estado de alarma y Post-alarma.
 - `ARIAS INFRAESTRUCTURAS S.A.` no aparecía en el top 15 Pre-COVID, y pasa a ser el **#1** en Post-estado de alarma.
 
 **Lectura**: no es ni "todo cambió" ni "nada cambió" con el COVID — hay un grupo reducido de proveedores habituales de obra pública con presencia continuada (probablemente relación contractual o de confianza ya establecida con el Ayuntamiento antes de la pandemia), y a la vez movimientos individuales fuertes de empresas concretas que entran o salen del radar de un periodo a otro.
+
+*(consulta 10 de `sql/analisis.sql`)*
+
+**`MONTAJES ELECTRICOS VIZCAINO S.L.` no desaparece de los datos, solo factura mucho menos**: revisando sus 14 contratos completos (más 2 a través de una UTE con FOROVE, S.L.), la empresa sigue contratando con el Ayuntamiento en los 3 periodos (7 contratos Pre-COVID, 6 en Estado de alarma, 2 Post-alarma — su último contrato en el dataset es de octubre de 2021) — lo que cae de forma muy brusca es el **importe**, no la actividad: 126.587,07 € Pre-COVID → 22.263,23 € en Estado de alarma (−82%) → 50.960,08 € Post-alarma (todavía muy por debajo del nivel Pre-COVID). Una búsqueda pública no encontró ningún aviso de disolución, cierre o concurso de acreedores para la empresa — sigue registrada en el Registro Mercantil de A Coruña (administrador único Carlos Cayetano Vizcaino Martínez, socio único Electricidad Creuceiro SL) — así que la salida del top 15 parece deberse a que dejó de ganar los contratos grandes de obra/instalación eléctrica que tenía antes del COVID (quedándole solo reparaciones puntuales de bombas y mantenimiento, de importe mucho menor), no a un cierre de la empresa.
+
+**`ARIAS INFRAESTRUCTURAS S.A.` creció en volumen y en frecuencia**: 1 contrato Pre-COVID (29.262,10 €) → 4 en Estado de alarma (128.383,60 €) → 6 Post-alarma (205.478,01 €) — más del triple de contratos y más de 7 veces el importe entre el primer y el último periodo. Sus contratos son sobre todo de "Obras" (mejora de pavimento de calzada en varias calles, demolición de pasarela, reparación de bajantes del estadio de Riazor) y, igual que `CONSTRUCCIONES LOPEZ CAO S.L.`, varios de ellos (5 de 11) están entre el 95,7% y el 100% del umbral legal — ver el hallazgo de "quedarse justo por debajo del umbral" más arriba.
 
 **El mismo patrón se repite, más atenuado, entre personas físicas anonimizadas**: repitiendo el ejercicio filtrando solo por `tipo_persona = "Persona física anonimizada"`, **7 personas** aparecen en el top 15 de **2 de los 3 periodos** (ninguna en los 3, a diferencia de las empresas): `ABELENDA HERMIDA, ANA ISABEL`, `PRIETO BLANCO, JESUS MIGUEL`, `FERNANDEZ LISTE, SALOME` y `VILLAZALA ROCA, OCTAVIO` (Pre-COVID + Estado de alarma); `PENA VILLAR, MANUEL`, `RODRIGUEZ ALVAREZ, DAVID` y `RODRIGUEZ CASTRO, ANGEL MARCELO` (Estado de alarma + Post-alarma). No es solo un fenómeno de empresas constructoras — también hay profesionales individuales con relación recurrente con el Ayuntamiento, probablemente técnicos especializados (de `RODRIGUEZ ALVAREZ, DAVID` ya sabemos, por su `objeto`, que es quien restaura el reloj monumental de María Pita — un trabajo muy específico que explica por qué se repite).
 
@@ -231,6 +274,56 @@ Ya sabíamos (sección de limpieza, punto 2) que el Ayuntamiento fue anonimizand
 | Post-estado de alarma | 1.518 (78,61%) | **0 (0%)** | 413 (21,39%) |
 
 En el **Post-estado de alarma, ninguna persona física aparece ya con su DNI visible** — el 100% de los particulares adjudicatarios de ese periodo están anonimizados. El peso de las personas jurídicas (empresas) se mantiene estable alrededor del 78-80% en los 3 periodos; lo que cambia es solo cómo se trata a las personas físicas, no cuánto gasto reciben en conjunto.
+
+## Evidencias de trabajo propio
+
+### Esquema de la pipeline
+
+```
+Portal de Transparencia del Concello da Coruña (12 ficheros trimestrales, .xlsx/.ods)
+        │
+        │  src/01_extract.py   — detecta formato por contenido, mapea columnas por cabecera
+        ▼
+data/processed/bronze_contratos_menores.csv        (bronce: consolidado, sin limpiar)
+        │
+        │  src/02_clean.py     — tipos, nulos, duplicados (ver secciones de arriba)
+        ▼
+data/processed/contratos_menores_limpio.csv         (plata: 8.421 filas limpias)
+        │
+        │  src/03_build_gold.py — construye dimensiones + hecho (esquema en estrella)
+        ▼
+data/gold/*.csv  →  src/04_load_snowflake.py  →  Snowflake
+        (fact_contratos + dim_fecha / dim_empresa / dim_area / dim_tipo_contrato)
+        │
+        │  sql/analisis.sql    — 11 consultas: 4 preguntas de negocio, patrón de
+        │                        investigación del umbral/fraccionamiento, control de calidad
+        ▼
+Power BI (powerbi/contratos_coruna.pbix)  →  conclusiones
+```
+
+### La fuente elegida y por qué es adecuada
+
+Portal de Transparencia del Concello da Coruña (ver tabla de ficheros y URLs al principio de este documento). Es adecuada porque: es una fuente **oficial y pública** (no hace falta solicitud de acceso a la información), publica los contratos menores **trimestre a trimestre de forma consistente** (un fichero por trimestre, 12 ficheros para los 3 años elegidos), y trae de serie casi todos los campos que pide el reto (expediente, fecha, área, objeto, NIF, empresa, importe; el único que falta en una parte del periodo es `tipo_contrato`, ausente solo en T1 2019). Se eligió el rango 2019-2021 específicamente porque permite comparar un año "normal" (2019) con el año de la declaración del estado de alarma (2020) y el año de recuperación (2021) — necesario para la pregunta central del proyecto (el impacto del COVID en la contratación municipal).
+
+### Tres decisiones de limpieza, con ejemplos reales
+
+1. **Reconstrucción de una fecha mal formada** (`src/02_clean.py`, tratamiento de `fecha_adjudicacion`): el expediente `231/2019/290` traía `"08/082019"` en el origen — falta la barra entre mes y año. Solo hay una lectura razonable (`08/08/2019`), así que se detecta ese patrón concreto con una expresión regular y se recupera en vez de dejarlo vacío (sin esto, 41 filas se habrían quedado sin fecha solo por mezclar formato día-primero con el estándar).
+2. **Reconstrucción de un importe con formato ambiguo** (tratamiento de `importe`): el expediente `AD0/2021/130` traía `"9.399.28 €"` (dos puntos, ninguna coma). Agrupado en bloques de 3 dígitos + 2 decimales (`9` + `.399` + `.28`) coincide con el formato español de moneda con un único error (el separador decimal debería ser coma, no punto) — y la lectura alternativa (`939.928 €`) superaría varias veces el umbral legal de 15.000 €, por lo que ni siquiera podría estar publicado legalmente como contrato menor. Se reconstruye a `9399.28`.
+3. **Regla de duplicados por fase administrativa** (Regla 3 de deduplicación): el expediente `861/2021/199` (TRADESEGUR) aparece dos veces con el mismo importe exacto (18.089,50 €) — primero en julio de 2021 como adjudicación, y de nuevo en octubre con el objeto ampliado a `"ADO - FRA. F21E-00574"` (Autorización-Disposición-Obligación + nº de factura). Es la misma compra pasando de fase de adjudicación a fase de aprobación de factura, no un gasto nuevo — se elimina la segunda fila y se conserva la fecha de adjudicación original (20 filas afectadas en total).
+
+### Una limitación de los datos y cómo afecta a las conclusiones
+
+El dataset solo contiene lo que el Ayuntamiento decide publicar en el portal de transparencia — un resumen por línea de contrato (expediente, importe, fecha, adjudicatario, objeto breve) — **no el expediente administrativo completo** (pliego de condiciones, memoria justificativa, posibles modificados o ampliaciones de contrato). Esto afecta directamente a la conclusión más delicada del proyecto: los hallazgos sobre contratos cerca del umbral legal o posible fraccionamiento (`CONSTRUCCIONES LOPEZ CAO S.L.`, `ARIAS INFRAESTRUCTURAS S.A.`, el caso de `VILLAZALA ROCA, OCTAVIO`) son **patrones estadísticos a investigar, no pruebas** — sin el expediente real no se puede confirmar si un importe justo bajo el umbral responde a una intención de evitar la licitación mayor, a una estimación de coste honesta, o a una modificación legítima del contrato durante su ejecución. Cada hallazgo de este tipo se documenta explícitamente con esa reserva.
+
+### Tres hallazgos respaldados por cifras
+
+1. **El importe medio por contrato sube con el COVID, aunque el número de contratos apenas cambia**: normalizando por mes para que los 3 periodos sean comparables (duran distinto), el ritmo de contratación es parecido (Pre-COVID ~245 contratos/mes, Estado de alarma ~214/mes, Post-alarma ~250/mes — una caída real de solo ~13% durante el confinamiento), pero el importe medio por contrato pasa de **2.051,50 €** (Pre-COVID) a **3.873,61 €** (Estado de alarma) y se mantiene alto en **3.499,27 €** (Post-alarma) — casi el doble que antes de la pandemia (consulta 5 de `sql/analisis.sql`).
+2. **Noviembre de 2020 concentra el pico de gasto de toda la serie**: **476 contratos** por **2.215.749,70 €**, el mes de mayor gasto de los 3 años — investigado a fondo para descartar error de dato, se confirma que son contratos reales y repartidos, sobre todo de tipo Obras, coincidiendo con el cierre del ejercicio presupuestario y un giro hacia más contratos de Obras durante el estado de alarma (consulta 6 de `sql/analisis.sql`).
+3. **Patrón de contratos cerca del umbral legal en los dos principales contratistas de obra civil**: `CONSTRUCCIONES LOPEZ CAO S.L.` tiene **10 de sus 19 contratos entre el 96,7% y el 100,0%** del umbral legal de Obras (40.000 € sin IVA), un patrón que arranca justo en marzo de 2020; y `ARIAS INFRAESTRUCTURAS S.A.` firmó **el mismo día** (13 de octubre de 2020) dos contratos de pavimentación de calzada por **39.797,00 €** y **39.793,23 €** — sumados, **79.590,23 €**, muy por encima del umbral (consultas 9 y 11 de `sql/analisis.sql`).
+
+### Una mejora que haría con más tiempo
+
+Contrastar los casos marcados como "patrón a investigar" (cerca del umbral, posible fraccionamiento) con una fuente externa que sí recoja el expediente administrativo completo — por ejemplo la Plataforma de Contratación del Sector Público o el Registro de Contratos municipal — para poder pasar de "señal estadística" a "confirmado/descartado" en cada caso, en vez de dejarlo como hipótesis razonada. En segundo lugar, automatizaría la descarga trimestral del portal de transparencia (ahora mismo es manual, fichero a fichero) para que el pipeline se pudiera reejecutar y mantener actualizado sin intervención cada vez que el Ayuntamiento publique un trimestre nuevo.
 
 ```bash
 python -m venv .venv
