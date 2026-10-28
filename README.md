@@ -275,53 +275,31 @@ Ya sabíamos (sección de limpieza, punto 2) que el Ayuntamiento fue anonimizand
 
 En el **Post-estado de alarma, ninguna persona física aparece ya con su DNI visible** — el 100% de los particulares adjudicatarios de ese periodo están anonimizados. El peso de las personas jurídicas (empresas) se mantiene estable alrededor del 78-80% en los 3 periodos; lo que cambia es solo cómo se trata a las personas físicas, no cuánto gasto reciben en conjunto.
 
-## Evidencias de trabajo propio
+## Agente de preguntas en lenguaje natural (`src/05_agent.py`, extra)
 
-### Esquema de la pipeline
+Script que traduce una pregunta en español a una consulta SQL sobre el modelo en estrella de Snowflake, la ejecuta y responde en lenguaje natural con el resultado real — para poder "preguntarle a los datos" sin escribir SQL a mano.
 
-```
-Portal de Transparencia del Concello da Coruña (12 ficheros trimestrales, .xlsx/.ods)
-        │
-        │  src/01_extract.py   — detecta formato por contenido, mapea columnas por cabecera
-        ▼
-data/processed/bronze_contratos_menores.csv        (bronce: consolidado, sin limpiar)
-        │
-        │  src/02_clean.py     — tipos, nulos, duplicados (ver secciones de arriba)
-        ▼
-data/processed/contratos_menores_limpio.csv         (plata: 8.421 filas limpias)
-        │
-        │  src/03_build_gold.py — construye dimensiones + hecho (esquema en estrella)
-        ▼
-data/gold/*.csv  →  src/04_load_snowflake.py  →  Snowflake
-        (fact_contratos + dim_fecha / dim_empresa / dim_area / dim_tipo_contrato)
-        │
-        │  sql/analisis.sql    — 11 consultas: 4 preguntas de negocio, patrón de
-        │                        investigación del umbral/fraccionamiento, control de calidad
-        ▼
-Power BI (powerbi/contratos_coruna.pbix)  →  conclusiones
+**Se probó primero con Snowflake Cortex/AI SQL** (`SNOWFLAKE.CORTEX.COMPLETE` y su sucesora `AI_COMPLETE`), pero ambas funciones están **bloqueadas en cuentas trial** de Snowflake (`"not available for trial accounts"`). Para no depender de una API de pago, el LLM corre en local con **[Ollama](https://ollama.com)** (modelo `llama3.1:8b`, gratis, sin API key, sin tarjeta de crédito, sin salir del equipo) — Snowflake se sigue usando solo para ejecutar la SQL generada y leer los datos reales.
+
+**Es un agente, no una sola llamada ciega**: si la SQL generada falla al ejecutarse en Snowflake (sintaxis, columna inexistente...), el script le devuelve el mensaje de error real al modelo y le pide que la corrija, hasta 3 veces, antes de rendirse. Ejemplo real encontrado al probarlo: el modelo generó `IF(...)` (sintaxis MySQL) en vez de `IFF(...)` (Snowflake) — el primer intento falló con `Unknown functions IF`, y el reintento con el error adjunto lo corrigió solo.
+
+**Medidas de seguridad**: la SQL generada se valida antes de ejecutarse — debe empezar por `SELECT`/`WITH`, no puede contener palabras de escritura (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`...), y se le añade un `LIMIT` si no lo trae. El agente solo puede leer, nunca modificar el modelo.
+
+**Limitación realista, esperable en un modelo local pequeño y gratuito**: probado con ~20 preguntas variadas durante el desarrollo, corrigiendo el prompt cada vez que fallaba (reglas sobre `COUNT(*)` vs `COUNT(DISTINCT...)`, `ILIKE` para nombres de empresa/área en vez de `=` exacto, usar `SUPERA_UMBRAL`/`CERCA_UMBRAL` en vez de recalcular el umbral a mano, `SUM()` dentro del `GROUP BY` en vez de la columna suelta, `NULLS LAST` en `ORDER BY DESC`...). Con eso, acierta de forma fiable en preguntas de una sola dimensión (año, área, empresa, umbral) incluso con JOIN. Sigue fallando con preguntas que combinan **varias agregaciones anidadas a la vez** (ej. "¿cuál fue el mes con más gasto?", que necesita `SUM` + `GROUP BY` por mes-año + desambiguar "mes concreto" vs "mes del calendario") — se probó ampliar la ventana de contexto de Ollama (el esquema+reglas ya ocupan ~2.400 tokens de los 4.096 por defecto) pero en este equipo, sin GPU, eso lo hizo bastante más lento sin garantizar el acierto, así que se dejó el valor por defecto. En estos casos la SQL generada se sigue imprimiendo siempre en pantalla, así que cualquier respuesta se puede auditar contra la consulta real antes de darla por buena, en vez de confiar a ciegas en el texto final — ese es el diseño que hace al agente fiable de usar, no la perfección del modelo.
+
+Uso:
+```bash
+# requiere Ollama instalado y corriendo, con el modelo descargado:
+#   ollama pull llama3.1:8b
+python src/05_agent.py "¿Cuántos contratos hubo en 2020?"
+python src/05_agent.py            # modo interactivo
 ```
 
-### La fuente elegida y por qué es adecuada
-
-Portal de Transparencia del Concello da Coruña (ver tabla de ficheros y URLs al principio de este documento). Es adecuada porque: es una fuente **oficial y pública** (no hace falta solicitud de acceso a la información), publica los contratos menores **trimestre a trimestre de forma consistente** (un fichero por trimestre, 12 ficheros para los 3 años elegidos), y trae de serie casi todos los campos que pide el reto (expediente, fecha, área, objeto, NIF, empresa, importe; el único que falta en una parte del periodo es `tipo_contrato`, ausente solo en T1 2019). Se eligió el rango 2019-2021 específicamente porque permite comparar un año "normal" (2019) con el año de la declaración del estado de alarma (2020) y el año de recuperación (2021) — necesario para la pregunta central del proyecto (el impacto del COVID en la contratación municipal).
-
-### Tres decisiones de limpieza, con ejemplos reales
-
-1. **Reconstrucción de una fecha mal formada** (`src/02_clean.py`, tratamiento de `fecha_adjudicacion`): el expediente `231/2019/290` traía `"08/082019"` en el origen — falta la barra entre mes y año. Solo hay una lectura razonable (`08/08/2019`), así que se detecta ese patrón concreto con una expresión regular y se recupera en vez de dejarlo vacío (sin esto, 41 filas se habrían quedado sin fecha solo por mezclar formato día-primero con el estándar).
-2. **Reconstrucción de un importe con formato ambiguo** (tratamiento de `importe`): el expediente `AD0/2021/130` traía `"9.399.28 €"` (dos puntos, ninguna coma). Agrupado en bloques de 3 dígitos + 2 decimales (`9` + `.399` + `.28`) coincide con el formato español de moneda con un único error (el separador decimal debería ser coma, no punto) — y la lectura alternativa (`939.928 €`) superaría varias veces el umbral legal de 15.000 €, por lo que ni siquiera podría estar publicado legalmente como contrato menor. Se reconstruye a `9399.28`.
-3. **Regla de duplicados por fase administrativa** (Regla 3 de deduplicación): el expediente `861/2021/199` (TRADESEGUR) aparece dos veces con el mismo importe exacto (18.089,50 €) — primero en julio de 2021 como adjudicación, y de nuevo en octubre con el objeto ampliado a `"ADO - FRA. F21E-00574"` (Autorización-Disposición-Obligación + nº de factura). Es la misma compra pasando de fase de adjudicación a fase de aprobación de factura, no un gasto nuevo — se elimina la segunda fila y se conserva la fecha de adjudicación original (20 filas afectadas en total).
-
-### Una limitación de los datos y cómo afecta a las conclusiones
+## Una limitación de los datos y cómo afecta a las conclusiones
 
 El dataset solo contiene lo que el Ayuntamiento decide publicar en el portal de transparencia — un resumen por línea de contrato (expediente, importe, fecha, adjudicatario, objeto breve) — **no el expediente administrativo completo** (pliego de condiciones, memoria justificativa, posibles modificados o ampliaciones de contrato). Esto afecta directamente a la conclusión más delicada del proyecto: los hallazgos sobre contratos cerca del umbral legal o posible fraccionamiento (`CONSTRUCCIONES LOPEZ CAO S.L.`, `ARIAS INFRAESTRUCTURAS S.A.`, el caso de `VILLAZALA ROCA, OCTAVIO`) son **patrones estadísticos a investigar, no pruebas** — sin el expediente real no se puede confirmar si un importe justo bajo el umbral responde a una intención de evitar la licitación mayor, a una estimación de coste honesta, o a una modificación legítima del contrato durante su ejecución. Cada hallazgo de este tipo se documenta explícitamente con esa reserva.
 
-### Tres hallazgos respaldados por cifras
-
-1. **El importe medio por contrato sube con el COVID, aunque el número de contratos apenas cambia**: normalizando por mes para que los 3 periodos sean comparables (duran distinto), el ritmo de contratación es parecido (Pre-COVID ~245 contratos/mes, Estado de alarma ~214/mes, Post-alarma ~250/mes — una caída real de solo ~13% durante el confinamiento), pero el importe medio por contrato pasa de **2.051,50 €** (Pre-COVID) a **3.873,61 €** (Estado de alarma) y se mantiene alto en **3.499,27 €** (Post-alarma) — casi el doble que antes de la pandemia (consulta 5 de `sql/analisis.sql`).
-2. **Noviembre de 2020 concentra el pico de gasto de toda la serie**: **476 contratos** por **2.215.749,70 €**, el mes de mayor gasto de los 3 años — investigado a fondo para descartar error de dato, se confirma que son contratos reales y repartidos, sobre todo de tipo Obras, coincidiendo con el cierre del ejercicio presupuestario y un giro hacia más contratos de Obras durante el estado de alarma (consulta 6 de `sql/analisis.sql`).
-3. **Patrón de contratos cerca del umbral legal en los dos principales contratistas de obra civil**: `CONSTRUCCIONES LOPEZ CAO S.L.` tiene **10 de sus 19 contratos entre el 96,7% y el 100,0%** del umbral legal de Obras (40.000 € sin IVA), un patrón que arranca justo en marzo de 2020; y `ARIAS INFRAESTRUCTURAS S.A.` firmó **el mismo día** (13 de octubre de 2020) dos contratos de pavimentación de calzada por **39.797,00 €** y **39.793,23 €** — sumados, **79.590,23 €**, muy por encima del umbral (consultas 9 y 11 de `sql/analisis.sql`).
-
-### Una mejora que haría con más tiempo
+## Una mejora que haría con más tiempo
 
 Contrastar los casos marcados como "patrón a investigar" (cerca del umbral, posible fraccionamiento) con una fuente externa que sí recoja el expediente administrativo completo — por ejemplo la Plataforma de Contratación del Sector Público o el Registro de Contratos municipal — para poder pasar de "señal estadística" a "confirmado/descartado" en cada caso, en vez de dejarlo como hipótesis razonada. En segundo lugar, automatizaría la descarga trimestral del portal de transparencia (ahora mismo es manual, fichero a fichero) para que el pipeline se pudiera reejecutar y mantener actualizado sin intervención cada vez que el Ayuntamiento publique un trimestre nuevo.
 
@@ -337,4 +315,8 @@ python src/04_load_snowflake.py
 # las consultas de sql/analisis.sql se ejecutan directamente en un
 # Worksheet de Snowsight, o con cualquier cliente conectado a la BD/esquema
 # del .env
+
+# Opcional: agente de preguntas en lenguaje natural (necesita Ollama)
+ollama pull llama3.1:8b
+python src/05_agent.py "¿Cuántos contratos hubo en 2020?"
 ```

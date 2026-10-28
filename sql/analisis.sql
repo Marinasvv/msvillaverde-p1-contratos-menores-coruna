@@ -88,10 +88,10 @@ ORDER BY dimension, importe_total_con_iva DESC;
 
 -- Conclusión: el área que más gasto concentra es "SERVICIOS GENERALES DE
 -- INFRAESTRUCTURAS" (3.591.764,47 € en 207 contratos), seguida de
--- "SERVICIOS GENERALES DE CI" (2.589.078,59 €, pero con 1.002 contratos:
+-- "SERVICIOS GENERALES DE CI" (2.583.786,04 €, pero con 1.001 contratos:
 -- mucho más volumen, importe medio más bajo) y "GESTION DE DEPORTES"
--- (2.488.288,89 €). Por tipo de contrato, "Servicios" domina claramente
--- (11.812.976,44 €), casi el doble que "Obras" (6.626.798,48 €) pese a que
+-- (2.482.466,13 €). Por tipo de contrato, "Servicios" domina claramente
+-- (11.785.055,81 €), casi el doble que "Obras" (6.620.258,43 €) pese a que
 -- Obras tiene umbrales legales más altos (40.000 € vs 15.000 €) - hay mucho
 -- más VOLUMEN de contratos de servicios, no necesariamente contratos
 -- individuales más caros.
@@ -228,9 +228,6 @@ SELECT 'duplicados_exactos', COUNT(*) FROM (
 
 -- =====================================================================
 -- 8. Detalle de los 3 contratos que superan el umbral legal
--- (complemento de la consulta 4, que mira cerca_umbral; esta mira
--- supera_umbral). Usado para el hallazgo "cómo es posible que un
--- contrato menor supere el umbral" del README.
 -- =====================================================================
 SELECT
     fc.expediente,
