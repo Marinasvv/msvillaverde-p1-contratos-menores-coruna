@@ -122,7 +122,6 @@ def _read_one(path: Path) -> pd.DataFrame:
         data = raw.iloc[1:].copy()
         # Fila tal como se ve en la hoja de calculo (Excel/LibreOffice
         # empiezan a contar en 1): sirve para localizar el registro
-        # original a mano si hace falta justificarlo en la defensa.
         data["fila_origen"] = data.index + 1
         data = data.rename(columns=FLAT_HEADER_POSITIONS)
         data = data[[c for c in FLAT_HEADER_POSITIONS.values()] + ["fila_origen"]]
