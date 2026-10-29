@@ -239,9 +239,21 @@ def _llm_completar(prompt: str, modelo: str) -> str:
         resp = requests.post(
             OLLAMA_URL,
             json={"model": modelo, "prompt": prompt, "stream": False},
-            timeout=120,
+            # 240s: la primera llamada tras 5 min de inactividad obliga a
+            # Ollama a recargar el modelo (~5GB) desde disco a memoria, lo
+            # que en un equipo sin GPU puede superar los 120s por si solo,
+            # antes incluso de empezar a generar.
+            timeout=240,
         )
         resp.raise_for_status()
+    except requests.exceptions.ReadTimeout:
+        print(
+            "\nOllama tardo demasiado en responder (mas de 240s).\n"
+            "Es normal la primera vez tras un rato sin usarlo (recarga el "
+            "modelo en memoria) - vuelve a intentar la misma pregunta, "
+            "deberia ir mas rapido ya con el modelo cargado.\n"
+        )
+        raise
     except requests.exceptions.ConnectionError:
         print(
             "\nNo se pudo conectar con Ollama en http://localhost:11434.\n"

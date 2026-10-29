@@ -294,6 +294,11 @@ Uso:
 python src/05_agent.py "¿Cuántos contratos hubo en 2020?"
 python src/05_agent.py            # modo interactivo
 ```
+### Ejemplos
+
+- `¿Cuántos contratos hubo en 2019?` → 2.974 (agregación simple)
+- `¿Cuánto gastó el área de Gestión de Deportes en 2020?` → 981.640,61 € (filtro cruzado área + año, resuelve "área" por `ILIKE` contra `DIM_AREA`, no por el nombre de empresa)
+- `¿Cuántos contratos superan el umbral legal?` → 3 (usa la columna `SUPERA_UMBRAL` ya calculada en el modelo, en vez de recalcular el umbral a mano)
 
 ## Una limitación de los datos y cómo afecta a las conclusiones
 
